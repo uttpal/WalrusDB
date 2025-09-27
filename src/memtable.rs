@@ -15,11 +15,16 @@ impl Memtable {
         }
     }
 
-    pub fn put(&mut self, key:Key, value:Value) {
-        self.entries.insert(key, value);
+    pub fn put_if_absent(&mut self, key:Key, value:Value) -> bool {
+        let val = self.entries.insert(key, value);
+        val.is_none()
     }
 
     pub fn get(&self, key:Key) -> Option<Value> {
         self.entries.get(&key).cloned()
+        // TODO: Tombstone to WAL if exists
+    }
+    pub fn delete(&mut self, key:Key) -> Option<Value> {
+        self.entries.remove(&key)
     }
 }
