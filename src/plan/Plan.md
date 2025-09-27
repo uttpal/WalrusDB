@@ -1,9 +1,14 @@
 # Plan: Rust LSM-Tree Storage Engine
 
-## Milestone 1: Core Write + Read
+## Milestone 1: Core Write + Read (Active)
 - **Components**
+    - [x] Memtable (`BTreeMap<Key, Value>`)
     - WAL (append-only log file)
-    - Memtable (`BTreeMap<Key, Value>`)
+      - [x] Open,
+      - Put
+        - Serialization/Deserialization
+      - iteration
+      - Close
 - **Features**
     - `put(key, value)`
     - `get(key)`

@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-pub type Key = Vec<u8>;
-pub type Value = Vec<u8>;
+pub type Key = Arc<Vec<u8>>;
+pub type Value = Arc<Vec<u8>>;
 
 pub struct Memtable {
     entries: BTreeMap<Key, Value>

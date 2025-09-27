@@ -10,5 +10,3 @@
     - Restartable KV store with durability
 
 ---
-
-- [ ] Create Memtable with write api
