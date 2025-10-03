@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub type Key = Arc<Vec<u8>>;
 pub type Value = Arc<Vec<u8>>;
+const TOMBSTONE: &[u8] = b"__DEL__";
 
 pub struct Memtable {
     entries: BTreeMap<Key, Value>
@@ -15,16 +16,22 @@ impl Memtable {
         }
     }
 
-    pub fn put_if_absent(&mut self, key:Key, value:Value) -> bool {
+    pub fn put(&mut self, key:Key, value:Value) -> bool {
         let val = self.entries.insert(key, value);
         val.is_none()
     }
 
     pub fn get(&self, key:Key) -> Option<Value> {
-        self.entries.get(&key).cloned()
-        // TODO: Tombstone to WAL if exists
+        // check if value is not tombstone
+        let val = self.entries.get(&key).cloned();
+        match val {
+            Some(val) if *val.as_ref() == TOMBSTONE.to_vec() => None,
+            Some(val) => Some(val),
+            None => Option::None,
+        }
     }
+    
     pub fn delete(&mut self, key:Key) -> Option<Value> {
-        self.entries.remove(&key)
+        self.entries.insert(key, Arc::from(TOMBSTONE.to_vec()))
     }
 }

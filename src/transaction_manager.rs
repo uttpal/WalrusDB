@@ -23,12 +23,15 @@ impl TransactionManager {
     }
 
     pub fn write(&mut self, entry: DBEntry) -> Result<DBEntry, io::Error> {
-        let exists = self.memtable.put_if_absent(entry.key.clone(), entry.value.clone());
+        //Need to tweak visibility of record after saved in WAL
+        let exists = self.memtable.put(entry.key.clone(), entry.value.clone());
+
         if exists {
             let mut wal_entry = WalEntry { key: entry.key.clone(), value: entry.value.clone()};
             self.wal.append(&mut wal_entry)?;
             self.wal.sync()?;
         }
+
         Ok(DBEntry {
             key: entry.key.clone(),
             value: entry.value.clone(),
@@ -46,7 +49,7 @@ impl TransactionManager {
     pub fn replay(&mut self) -> Result<(), io::Error> {
         for entry_result in self.wal.iter()? {
             let entry = entry_result?;
-            self.memtable.put_if_absent(entry.key, entry.value);
+            self.memtable.put(entry.key, entry.value);
         }
         Ok(())
     }

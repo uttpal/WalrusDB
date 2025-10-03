@@ -15,7 +15,14 @@
     - Crash recovery by replaying WAL into memtable
 - **Deliverable**
     - Restartable KV store with durability
-
+* Implement WAL Commmit queue
+* Introduce opcode in wal
+* Implement delete in wal
+* Setup AWS account with s3 express one
+* Integrate local s3 express one
+* Ship logs to s3 express one
+* Make sure only primary writes to wal
+* Recover Using logs from s3
 ---
 
 ## Milestone 2: Flush to SSTable
