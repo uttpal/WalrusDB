@@ -1,7 +1,7 @@
-WalrusDB is distributed database in rust
+WalrusDB is distributed database in rust under development.
 
 ### Plan
-## Milestone 1: Basic Read/Write persistance
+## Milestone 1: Basic Read/Write persistence
 - **Components**
     - [x] Memtable (`BTreeMap<Key, Value>`)
     - WAL (append-only log file)
@@ -19,7 +19,7 @@ WalrusDB is distributed database in rust
 
 
 ## Milestone 2: Buffered WAL on s3 express one
-* Implement WAL Commmit queue
+* Implement WAL Commit queue
 * Introduce opcode in wal
 * Implement delete in wal
 * Setup AWS account with s3 express one
