@@ -23,12 +23,13 @@ impl TransactionManager {
     }
 
     pub fn write(&mut self, entry: DBEntry) -> Result<DBEntry, io::Error> {
-        //Need to tweak visibility of record after saved in WAL
+        //TODO: Need to tweak visibility of record after saved in WAL
         let exists = self.memtable.put(entry.key.clone(), entry.value.clone());
 
         if exists {
             let mut wal_entry = WalEntry { key: entry.key.clone(), value: entry.value.clone()};
             self.wal.append(&mut wal_entry)?;
+            // TODO: Implement batch sync
             self.wal.sync()?;
         }
 

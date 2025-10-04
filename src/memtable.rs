@@ -23,14 +23,14 @@ impl Memtable {
 
     pub fn get(&self, key:Key) -> Option<Value> {
         // check if value is not tombstone
-        let val = self.entries.get(&key).cloned();
+        let val = self.entries.get(&key);
         match val {
             Some(val) if *val.as_ref() == TOMBSTONE.to_vec() => None,
-            Some(val) => Some(val),
-            None => Option::None,
+            Some(val) => Some(val.clone()),
+            None => None,
         }
     }
-    
+
     pub fn delete(&mut self, key:Key) -> Option<Value> {
         self.entries.insert(key, Arc::from(TOMBSTONE.to_vec()))
     }

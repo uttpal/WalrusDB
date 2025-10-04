@@ -77,6 +77,7 @@ impl FileWal {
     }
 
     pub fn sync(&mut self) -> io::Result<()> {
+        // TODO: Implement buffered write
         self.writer.flush()?;
         self.writer.get_mut().sync_all()?;
         Ok(())
