@@ -2,17 +2,24 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, BufReader, Seek, SeekFrom, Write, Read};
 use std::sync::Arc;
 use crate::memtable::{Key, Value};
+use crossbeam_queue::ArrayQueue;
+use tokio::sync::oneshot;
 
+
+#[derive(Debug)]
 pub struct WalEntry {
     pub key: Key,
     pub value: Value,
+    pub async_waiter: Option<oneshot::Sender<()>>,
 }
 
-pub struct FileWal {
+
+pub struct Wal {
     path: String,
     writer: BufWriter<File>,
     reader: BufReader<File>,
     position: u64,
+    ring_buffer: ArrayQueue<WalEntry>
 }
 
 fn serialize<W: Write>(entry: &WalEntry, mut w: W) -> io::Result<()> {
@@ -36,7 +43,7 @@ fn deserialize<R: Read>(mut r: R) -> io::Result<WalEntry> {
 
     r.read_exact(&mut key)?;
     r.read_exact(&mut value)?;
-    Ok(WalEntry { key: Arc::new(key), value: Arc::new(value)})
+    Ok(WalEntry { key: Arc::new(key), value: Arc::new(value), async_waiter: None })
 }
 
 pub struct WalIter<'a, R: Read> {
@@ -55,7 +62,7 @@ impl<'a, R: Read> Iterator for WalIter<'a, R> {
     }
 }
 
-impl FileWal {
+impl Wal {
     pub fn open(path: &str) -> io::Result<Self> {
         let file_write_handle= OpenOptions::new().create(true).append(true).read(true).open(path)?;
         let file_read_handle= OpenOptions::new().read(true).open(path)?;
@@ -65,15 +72,13 @@ impl FileWal {
             path: path.to_string(),
             writer: BufWriter::new(file_write_handle),
             reader: BufReader::new(file_read_handle),
+            ring_buffer: ArrayQueue::new(10000),
             position
         })
     }
 
-    pub fn append(&mut self, entry: &WalEntry) -> io::Result<u64> {
-        serialize(entry, &mut self.writer)?;
-        self.position = self.writer.stream_position()?;
-
-        Ok(self.position)
+    pub fn append(&mut self, entry: WalEntry) -> Result<(), WalEntry> {
+        self.ring_buffer.push(entry)
     }
 
     pub fn sync(&mut self) -> io::Result<()> {

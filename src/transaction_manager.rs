@@ -1,6 +1,8 @@
 use std::io;
 use crate::memtable::{Key, Memtable, Value};
-use crate::wal::{FileWal, WalEntry};
+use crate::wal::{Wal, WalEntry};
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::{Receiver, Sender};
 
 pub struct DBEntry {
     pub(crate) key: Key,
@@ -9,12 +11,12 @@ pub struct DBEntry {
 
 pub struct TransactionManager {
     pub memtable: Memtable,
-    pub wal: FileWal
+    pub wal: Wal
 }
 
 impl TransactionManager {
     pub fn new() -> io::Result<Self> {
-        let wal = FileWal::open("./wal.txt")?;
+        let wal = Wal::open("./wal.txt")?;
 
         Ok(Self {
             memtable: Memtable::new(),
@@ -22,16 +24,14 @@ impl TransactionManager {
         })
     }
 
-    pub fn write(&mut self, entry: DBEntry) -> Result<DBEntry, io::Error> {
-        //TODO: Need to tweak visibility of record after saved in WAL
-        let exists = self.memtable.put(entry.key.clone(), entry.value.clone());
+    pub async fn write(&mut self, entry: DBEntry) -> Result<DBEntry, io::Error> {
+        //TODO: Need to change visibility of record after saved in WAL
+        self.memtable.put(entry.key.clone(), entry.value.clone());
 
-        if exists {
-            let mut wal_entry = WalEntry { key: entry.key.clone(), value: entry.value.clone()};
-            self.wal.append(&mut wal_entry)?;
-            // TODO: Implement batch sync
-            self.wal.sync()?;
-        }
+        let (tx, rx): (Sender<()>, Receiver<()>) = oneshot::channel();
+        let wal_entry = WalEntry { key: entry.key.clone(), value: entry.value.clone(), async_waiter: Some(tx)};
+        self.wal.append(wal_entry).expect("Buffer full");
+        rx.await.expect("TODO: panic message");
 
         Ok(DBEntry {
             key: entry.key.clone(),
