@@ -1,9 +1,10 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, BufReader, Seek, SeekFrom, Write, Read};
 use std::sync::Arc;
+use std::time::Duration;
 use crate::memtable::{Key, Value};
 use crossbeam_queue::ArrayQueue;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 
 #[derive(Debug)]
@@ -19,7 +20,9 @@ pub struct Wal {
     writer: BufWriter<File>,
     reader: BufReader<File>,
     position: u64,
-    ring_buffer: ArrayQueue<WalEntry>
+    ring_buffer: ArrayQueue<WalEntry>,
+    notify: Notify,
+    flush_interval: Duration
 }
 
 fn serialize<W: Write>(entry: &WalEntry, mut w: W) -> io::Result<()> {
@@ -102,5 +105,30 @@ impl Wal {
 
     pub fn position(&self) -> u64 {
         self.position
+    }
+
+    pub async fn wal_consumer(&mut self) {
+        loop {
+            tokio::select! {
+                _ = self.notify.notified() => {
+                    // Woken by producer on count reach
+                },
+                _ = tokio::time::sleep(self.flush_interval) => {
+                    // Woken by timeout
+                }
+            }
+            let mut wal_batch = Vec::new();
+            while let Some(wal_entry) = self.ring_buffer.pop() {
+                wal_batch.push(wal_entry);
+            }
+
+            if wal_batch.len() == 0 {
+                continue;
+            }
+            //TODO: serialize before adding to wal buffer to maximize single threaded perf on consumer
+            let serialized_batch = wal_batch.iter().map(|entry| serialize(entry, self.writer.get_mut())).collect::<Result<Vec<_>, _>>().unwrap();
+
+        }
+
     }
 }
