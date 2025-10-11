@@ -1,5 +1,5 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, BufReader, Seek, SeekFrom, Write, Read};
+use std::fmt;
+use std::io::{self, BufWriter, BufReader, Seek, SeekFrom, Write, Read, Cursor};
 use std::sync::Arc;
 use std::time::Duration;
 use crate::memtable::{Key, Value};
@@ -14,25 +14,53 @@ pub struct WalEntry {
     pub async_waiter: Option<oneshot::Sender<()>>,
 }
 
+impl fmt::Display for WalEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key_str = String::from_utf8_lossy(&self.key);
+        let value_str = String::from_utf8_lossy(&self.value);
+        write!(f, "WalEntry {{ key: {}, value: {}, async_waiter: {} }}",
+               key_str, value_str,
+               if self.async_waiter.is_some() { "Some(_)" } else { "None" })
+    }
+}
 
-pub struct Wal {
-    path: String,
-    writer: BufWriter<File>,
-    reader: BufReader<File>,
-    position: u64,
-    ring_buffer: ArrayQueue<WalEntry>,
-    notify: Notify,
+
+pub struct WalConsumer {
+    ring_buffer: Arc<ArrayQueue<WalEntry>>,
+    notify: Arc<Notify>,
     flush_interval: Duration
 }
 
-fn serialize<W: Write>(entry: &WalEntry, mut w: W) -> io::Result<()> {
-    let key_len = entry.key.len().to_le_bytes();
-    let value_len = entry.value.len().to_le_bytes();
-    w.write_all(&key_len)?;
-    w.write_all(&value_len)?;
-    w.write_all(&entry.key)?;
-    w.write_all(&entry.value)?;
-    Ok(())
+pub struct WalProducer{
+    ring_buffer: Arc<ArrayQueue<WalEntry>>,
+    notify: Arc<Notify>,
+}
+
+pub struct WalContainer {
+    pub producer: WalProducer,
+    pub consumer: WalConsumer,
+}
+
+impl WalContainer{
+    pub fn new(capacity: usize, flush_interval: Duration) -> Self {
+        let queue = Arc::new(ArrayQueue::new(capacity));
+        let notify = Arc::new(Notify::new());
+        Self {
+            producer: WalProducer::new(queue.clone(), notify.clone()),
+            consumer: WalConsumer::new(queue, notify.clone(), flush_interval),
+        }
+    }
+}
+
+fn serialize(entry: &WalEntry) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(
+        8 + entry.key.len() + entry.value.len(),
+    );
+    buf.extend_from_slice(&(entry.key.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&(entry.value.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&entry.key);
+    buf.extend_from_slice(&entry.value);
+    buf
 }
 
 fn deserialize<R: Read>(mut r: R) -> io::Result<WalEntry> {
@@ -47,6 +75,11 @@ fn deserialize<R: Read>(mut r: R) -> io::Result<WalEntry> {
     r.read_exact(&mut key)?;
     r.read_exact(&mut value)?;
     Ok(WalEntry { key: Arc::new(key), value: Arc::new(value), async_waiter: None })
+}
+
+fn deserialize_from_bytes(bytes: Vec<u8>) -> io::Result<WalEntry> {
+    let mut cursor = Cursor::new(bytes);
+    deserialize(&mut cursor)
 }
 
 pub struct WalIter<'a, R: Read> {
@@ -65,36 +98,33 @@ impl<'a, R: Read> Iterator for WalIter<'a, R> {
     }
 }
 
-impl Wal {
-    pub fn open(path: &str) -> io::Result<Self> {
-        let file_write_handle= OpenOptions::new().create(true).append(true).read(true).open(path)?;
-        let file_read_handle= OpenOptions::new().read(true).open(path)?;
-        let position = file_write_handle.metadata()?.len();
-
-        Ok(Self {
-            path: path.to_string(),
-            writer: BufWriter::new(file_write_handle),
-            reader: BufReader::new(file_read_handle),
-            ring_buffer: ArrayQueue::new(10000),
-            position
-        })
+impl WalProducer {
+    pub fn new(ring_buffer: Arc<ArrayQueue<WalEntry>>, notify: Arc<Notify>) -> Self {
+        Self {
+            ring_buffer,
+            notify,
+        }
     }
 
-    pub fn append(&mut self, entry: WalEntry) -> Result<(), WalEntry> {
+    pub fn append(&self, entry: WalEntry) -> Result<(), WalEntry> {
         self.ring_buffer.push(entry)
     }
+}
 
-    pub fn sync(&mut self) -> io::Result<()> {
-        // TODO: Implement buffered write
-        self.writer.flush()?;
-        self.writer.get_mut().sync_all()?;
-        Ok(())
+impl WalConsumer {
+    pub fn new(ring_buffer: Arc<ArrayQueue<WalEntry>>, notify: Arc<Notify>, flush_interval: Duration) -> Self {
+        Self {
+            ring_buffer,
+            notify,
+            flush_interval
+        }
     }
 
-    pub fn iter(&mut self) -> io::Result<impl Iterator<Item = io::Result<WalEntry>>> {
-        self.reader.seek(SeekFrom::Start(0))?;
-        Ok(WalIter { reader: &mut self.reader })
-    }
+    // TODO: Move to Wal Reader
+    // pub fn iter(&mut self) -> io::Result<impl Iterator<Item = io::Result<WalEntry>>> {
+    //     self.reader.seek(SeekFrom::Start(0))?;
+    //     Ok(WalIter { reader: &mut self.reader })
+    // }
 
     pub fn truncate(&mut self) -> io::Result<()> {
         // self.writer.get_ref().set_len(0)
@@ -103,11 +133,11 @@ impl Wal {
         Ok(())
     }
 
-    pub fn position(&self) -> u64 {
-        self.position
-    }
+    // pub fn position(&self) -> u64 {
+    //     self.position
+    // }
 
-    pub async fn wal_consumer(&mut self) {
+    pub async fn start(&mut self) {
         loop {
             tokio::select! {
                 _ = self.notify.notified() => {
@@ -126,8 +156,14 @@ impl Wal {
                 continue;
             }
             //TODO: serialize before adding to wal buffer to maximize single threaded perf on consumer
-            let serialized_batch = wal_batch.iter().map(|entry| serialize(entry, self.writer.get_mut())).collect::<Result<Vec<_>, _>>().unwrap();
-
+            let serialized_batch = wal_batch.iter().map(|entry| serialize(entry)).collect::<Vec<Vec<u8>>>();
+            for entry in wal_batch {
+                //TODO: Write to s3
+                println!("WalEntry: {:?}", entry);
+                if let Some(waiter) = entry.async_waiter {
+                    let _ = waiter.send(());
+                }
+            }
         }
 
     }

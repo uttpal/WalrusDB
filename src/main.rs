@@ -1,23 +1,39 @@
 mod memtable;
 mod wal;
 mod transaction_manager;
+mod wal_store;
 
-use std::io::Error;
 use std::sync::Arc;
-use crate::transaction_manager::DBEntry;
+use std::time::Duration;
+use tokio::task::JoinSet;
+use crate::transaction_manager::{DBEntry, TransactionManager};
+use crate::wal::WalContainer;
 
-fn main() -> Result<(), Error>{
-    println!("Hello, world!");
-    let mut tm = transaction_manager::TransactionManager::new()?;
-    tm.replay()?;
-    let sample_entry = DBEntry{ key: Arc::new(b"test4".to_vec()), value: Arc::new(b"demo4".to_vec())};
-    tm.write(DBEntry { key: sample_entry.key.clone(), value: sample_entry.value.clone()});
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+async fn main() -> std::io::Result<()> {
+    let mut wal_container = WalContainer::new(10000, Duration::from_secs(10));
+    let tm = Arc::new(TransactionManager::new(wal_container.producer));
 
-    let read_entry = tm.read(sample_entry.key.clone())?;
-    println!("17 {:?}", String::from_utf8(read_entry.unwrap().to_vec()));
-    for entry_result in tm.wal.iter()? {
-        let entry = entry_result?;
-        println!("20 {:?} {:?}", String::from_utf8(entry.key.to_vec()), String::from_utf8(entry.value.to_vec()))
+    tokio::spawn(async move { wal_container.consumer.start().await });
+
+    let mut set = JoinSet::new();
+
+    for id in 0..8 {
+        for n in 0..100 {
+            let key = Arc::new(format!("k:{id}:{n}").into_bytes());
+            let val = Arc::new(format!("v:{id}:{n}").into_bytes());
+            let tm_ref = Arc::clone(&tm);
+
+            set.spawn(async move {
+                tm_ref.write(DBEntry {
+                    key: key.clone(),
+                    value: val.clone()
+                }).await.unwrap()
+            });
+        }
     }
-    Ok(())
+
+    while let Some(res) = set.join_next().await {
+        let _ = res;
+    }    Ok(())
 }
